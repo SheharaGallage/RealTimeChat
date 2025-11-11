@@ -1,8 +1,14 @@
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.awt.Desktop;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Base64;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -69,7 +75,54 @@ public class ChatClient {
                     try {
                         String serverMessage;
                         while ((serverMessage = in.readLine()) != null) {
-                            System.out.println(serverMessage); // Print server message
+                            // Special handling for incoming images: /imgfrom <sender> <filename> <base64>
+                            if (serverMessage.startsWith("/imgfrom ")) {
+                                String[] parts = serverMessage.split(" ", 4);
+                                if (parts.length >= 4) {
+                                    String sender = parts[1];
+                                    String filename = parts[2];
+                                    String base64 = parts[3];
+                                    try {
+                                        byte[] data = Base64.getDecoder().decode(base64);
+                                        Path downloads = Paths.get("downloads");
+                                        if (!Files.exists(downloads)) {
+                                            Files.createDirectories(downloads);
+                                        }
+                                        String outName = System.currentTimeMillis() + "_" + filename;
+                                        Path outPath = downloads.resolve(outName);
+                                        Files.write(outPath, data);
+                                        System.out.println(
+                                                "IMAGE from " + sender + ": saved to " + outPath.toAbsolutePath());
+                                        // Attempt to open the image automatically
+                                        try {
+                                            if (Desktop.isDesktopSupported()) {
+                                                Desktop.getDesktop().open(outPath.toFile());
+                                            } else {
+                                                String os = System.getProperty("os.name").toLowerCase();
+                                                if (os.contains("win")) {
+                                                    new ProcessBuilder("cmd", "/c", "start", "\"\"",
+                                                            outPath.toAbsolutePath().toString()).start();
+                                                } else if (os.contains("mac")) {
+                                                    new ProcessBuilder("open", outPath.toAbsolutePath().toString())
+                                                            .start();
+                                                } else {
+                                                    new ProcessBuilder("xdg-open", outPath.toAbsolutePath().toString())
+                                                            .start();
+                                                }
+                                            }
+                                        } catch (Exception openEx) {
+                                            System.out.println("(Could not open image automatically)");
+                                        }
+
+                                    } catch (IllegalArgumentException iae) {
+                                        System.out.println("SERVER: Received malformed image data from " + parts[1]);
+                                    }
+                                } else {
+                                    System.out.println(serverMessage);
+                                }
+                            } else {
+                                System.out.println(serverMessage); // Print server message
+                            }
                         }
                     } catch (IOException e) {
                         System.out.println("Connection to server lost.");
@@ -87,7 +140,6 @@ public class ChatClient {
                 }
                 out.println(name); // send name to server
 
-
                 // Announce presence to the server
                 out.println("/status online");
 
@@ -101,6 +153,31 @@ public class ChatClient {
                     userInput = consoleIn.readLine();
                     if (userInput == null) {
                         break;
+                    }
+                    // Image send shortcut: /img <local-path>
+                    if (userInput.startsWith("/img ")) {
+                        String pathStr = userInput.substring(5).trim();
+                        Path p = Paths.get(pathStr);
+                        try {
+                            if (!Files.exists(p) || Files.isDirectory(p)) {
+                                System.out.println("Local file not found: " + pathStr);
+                                continue;
+                            }
+                            long size = Files.size(p);
+                            long maxBytes = 5L * 1024 * 1024; // 5MB
+                            if (size > maxBytes) {
+                                System.out.println("File too large. Max 5MB allowed.");
+                                continue;
+                            }
+                            String filename = p.getFileName().toString();
+                            byte[] bytes = Files.readAllBytes(p);
+                            String b64 = Base64.getEncoder().encodeToString(bytes);
+                            out.println("/img " + filename + " " + b64);
+                            System.out.println("Sent image: " + filename);
+                        } catch (IOException ex) {
+                            System.out.println("Error reading file: " + ex.getMessage());
+                        }
+                        continue;
                     }
                     // Provide a small shortcut for away/online
                     if (userInput.equalsIgnoreCase("/away")) {

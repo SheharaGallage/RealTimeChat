@@ -45,12 +45,51 @@ public class ClientHandler extends Thread {
 
             // --- First: Ask client for their name ---
             out.println("Welcome! Please enter your name:");
-            clientName = in.readLine();
-            if (clientName == null || clientName.trim().isEmpty()) {
-                clientName = "Guest" + (allClients.size() + 1);
+
+            // Loop to validate name and prevent duplicates (max attempts)
+            int attempts = 0;
+            while (true) {
+                clientName = in.readLine();
+
+                // If client disconnected or sent EOF, assign a Guest name
+                if (clientName == null) {
+                    clientName = "Guest" + (allClients.size() + 1);
+                    break;
+                }
+
+                clientName = clientName.trim();
+                if (clientName.isEmpty()) {
+                    clientName = "Guest" + (allClients.size() + 1);
+                    break;
+                }
+
+                // Check for duplicates (case-insensitive)
+                boolean duplicate = false;
+                synchronized (allClients) {
+                    for (ClientHandler c : allClients) {
+                        if (c.clientName != null && c.clientName.equalsIgnoreCase(clientName)) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!duplicate) {
+                    // good name -> accept it
+                    break;
+                }
+
+                // Duplicate found: ask again (limit attempts)
+                attempts++;
+                out.println("SERVER: The name '" + clientName + "' is already taken. Please enter a different name:");
+                if (attempts >= 3) {
+                    // give up after several attempts and assign a unique guest-like name
+                    String suffix = String.valueOf(System.currentTimeMillis() % 1000);
+                    clientName = clientName + "_" + suffix;
+                    out.println("SERVER: Too many attempts. Your name has been set to: " + clientName);
+                    break;
+                }
             }
-            // --- ADDED BY MEMBER 4: Check for duplicate names ---
-            // (You can add logic here to prevent duplicate names)
 
             // --- Add this client to the shared list ---
             allClients.add(this);
@@ -68,6 +107,10 @@ public class ClientHandler extends Thread {
                 // --- Member 4's Task (Protocol) ---
                 if (clientMessage.equalsIgnoreCase("/quit")) {
                     break; // Exit the loop to disconnect
+                }
+                // --- Image transfer command ---
+                else if (clientMessage.startsWith("/img ")) {
+                    handleImageMessage(clientMessage);
                 }
                 // --- START: MEMBER 4'S NEW LOGIC ---
                 else if (clientMessage.startsWith("/w ")) {
@@ -257,6 +300,47 @@ public class ClientHandler extends Thread {
 
         } catch (Exception e) {
             out.println("SERVER: Error processing private message.");
+        }
+    }
+
+    /**
+     * Handle image messages sent by clients.
+     * Expected format from client: "/img <filename> <base64data>"
+     * This method forwards a tagged message to all clients: "/imgfrom <sender>
+     * <filename> <base64data>"
+     */
+    private void handleImageMessage(String message) {
+        try {
+            String[] parts = message.split(" ", 3);
+            if (parts.length < 3) {
+                out.println("SERVER: Invalid image command. Use: /img <filename> <base64data>");
+                return;
+            }
+
+            String filename = parts[1];
+            String base64 = parts[2];
+
+            // Simple size guard: limit base64 payload to ~7MB (~5MB binary)
+            final int MAX_BASE64_LENGTH = 7 * 1024 * 1024;
+            if (base64.length() > MAX_BASE64_LENGTH) {
+                out.println("SERVER: Image too large. Max ~5MB allowed.");
+                return;
+            }
+
+            // Broadcast as a raw image tag so clients can handle saving/opening
+            broadcastImageMessage(clientName, filename, base64);
+
+        } catch (Exception e) {
+            out.println("SERVER: Error processing image message.");
+        }
+    }
+
+    private void broadcastImageMessage(String sender, String filename, String base64) {
+        synchronized (allClients) {
+            for (ClientHandler client : allClients) {
+                // Send a single-line image tag that clients recognize
+                client.out.println("/imgfrom " + sender + " " + filename + " " + base64);
+            }
         }
     }
 
