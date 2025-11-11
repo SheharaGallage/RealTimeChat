@@ -3,6 +3,9 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -17,6 +20,14 @@ public class ClientHandler extends Thread {
     private PrintWriter out; // For sending messages to this client
     private BufferedReader in; // For reading messages from this client
     private String clientName;
+
+    // Presence and last-seen
+    private volatile String status = "online"; // online | away | offline
+    private volatile long lastSeen = 0L; // epoch millis
+
+    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter
+            .ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneId.systemDefault());
 
     // --- Member 3's Task (Thread-Safety) ---
     private static List<ClientHandler> allClients = Collections.synchronizedList(new ArrayList<>());
@@ -46,7 +57,9 @@ public class ClientHandler extends Thread {
 
             // --- Announce the new client to everyone ---
             System.out.println(clientName + " has joined the chat.");
+            status = "online";
             broadcastMessage("SERVER", clientName + " has joined the chat.");
+            broadcastMessage("SERVER", clientName + " is now online.");
 
             // --- Main message loop: Read messages from the client ---
             String clientMessage;
@@ -59,8 +72,15 @@ public class ClientHandler extends Thread {
                 // --- START: MEMBER 4'S NEW LOGIC ---
                 else if (clientMessage.startsWith("/w ")) {
                     handlePrivateMessage(clientMessage);
-                }
-                else if (clientMessage.equalsIgnoreCase("/list")) {
+                } else if (clientMessage.startsWith("/status ")) {
+                    handleStatusCommand(clientMessage);
+                } else if (clientMessage.startsWith("/typing ")) {
+                    handleTypingCommand(clientMessage);
+                } else if (clientMessage.startsWith("/me ")) {
+                    handleMeCommand(clientMessage);
+                } else if (clientMessage.startsWith("/lastseen ")) {
+                    handleLastSeenCommand(clientMessage);
+                } else if (clientMessage.equalsIgnoreCase("/list")) {
                     handleListCommand();
                 }
                 // --- END: MEMBER 4'S NEW LOGIC ---
@@ -76,19 +96,27 @@ public class ClientHandler extends Thread {
             // --- Clean up: This 'finally' block always runs ---
 
             // 1. Remove this client from the list
+            // Set status and lastSeen
+            status = "offline";
+            lastSeen = System.currentTimeMillis();
             allClients.remove(this);
 
             // 2. Announce that the client has left
             if (clientName != null) {
                 System.out.println(clientName + " has left the chat.");
                 broadcastMessage("SERVER", clientName + " has left the chat.");
+                broadcastMessage("SERVER", clientName + " is now offline (last seen: "
+                        + TIME_FORMATTER.format(Instant.ofEpochMilli(lastSeen)) + ").");
             }
 
             // 3. Close the streams and socket
             try {
-                if (out != null) out.close();
-                if (in != null) in.close();
-                if (clientSocket != null) clientSocket.close();
+                if (out != null)
+                    out.close();
+                if (in != null)
+                    in.close();
+                if (clientSocket != null)
+                    clientSocket.close();
             } catch (IOException e) {
                 System.err.println("Error closing client resources: " + e.getMessage());
             }
@@ -114,10 +142,80 @@ public class ClientHandler extends Thread {
         out.println("--- Currently Connected Users ---");
         synchronized (allClients) {
             for (ClientHandler client : allClients) {
-                out.println("- " + client.clientName);
+                out.println("- " + client.clientName + " (" + client.status + ")");
             }
         }
         out.println("---------------------------------");
+    }
+
+    /**
+     * Handle /status <state>
+     */
+    private void handleStatusCommand(String message) {
+        String[] parts = message.split(" ", 2);
+        if (parts.length < 2) {
+            out.println("SERVER: Usage: /status <online|away|offline>");
+            return;
+        }
+        String newStatus = parts[1].trim().toLowerCase();
+        if (!newStatus.equals("online") && !newStatus.equals("away") && !newStatus.equals("offline")) {
+            out.println("SERVER: Invalid status. Use online, away or offline.");
+            return;
+        }
+        this.status = newStatus;
+        if (newStatus.equals("offline")) {
+            this.lastSeen = System.currentTimeMillis();
+        }
+        broadcastMessage("SERVER", clientName + " changed status to " + newStatus + ".");
+    }
+
+    /**
+     * Handle /typing <start|stop>
+     */
+    private void handleTypingCommand(String message) {
+        String[] parts = message.split(" ", 2);
+        if (parts.length < 2)
+            return;
+        String action = parts[1].trim().toLowerCase();
+        if (action.equals("start")) {
+            broadcastMessage("SERVER", clientName + " is typing...");
+        } else if (action.equals("stop")) {
+            broadcastMessage("SERVER", clientName + " stopped typing.");
+        }
+    }
+
+    /**
+     * Handle /me <action> - broadcast as an action
+     */
+    private void handleMeCommand(String message) {
+        String[] parts = message.split(" ", 2);
+        if (parts.length < 2)
+            return;
+        String action = parts[1].trim();
+        broadcastMessage("", "* " + clientName + " " + action);
+    }
+
+    /**
+     * Handle /lastseen <username> - reply to requester
+     */
+    private void handleLastSeenCommand(String message) {
+        String[] parts = message.split(" ", 2);
+        if (parts.length < 2) {
+            out.println("SERVER: Usage: /lastseen <username>");
+            return;
+        }
+        String target = parts[1].trim();
+        synchronized (allClients) {
+            for (ClientHandler client : allClients) {
+                if (client.clientName.equalsIgnoreCase(target)) {
+                    out.println("SERVER: " + client.clientName + " is currently " + client.status + ".");
+                    return;
+                }
+            }
+        }
+        // If not found in allClients, can't get lastSeen here because offline users are
+        // removed from list
+        out.println("SERVER: User '" + target + "' is offline or unknown.");
     }
 
     /**

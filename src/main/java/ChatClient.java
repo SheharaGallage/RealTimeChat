@@ -30,9 +30,15 @@ public class ChatClient {
             // This trusts our self-signed certificate
             TrustManager[] trustAllCerts = new TrustManager[] {
                     new X509TrustManager() {
-                        public X509Certificate[] getAcceptedIssuers() { return null; }
-                        public void checkClientTrusted(X509Certificate[] certs, String authType) { }
-                        public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+                        public X509Certificate[] getAcceptedIssuers() {
+                            return null;
+                        }
+
+                        public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                        }
+
+                        public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                        }
                     }
             };
 
@@ -71,6 +77,24 @@ public class ChatClient {
                 });
                 listenerThread.start(); // Start the listener thread
 
+                System.out.println(in.readLine()); // SERVER: Welcome! Please enter your name:
+
+                // --- Ask for your name first ---
+                System.out.print("Enter your name: ");
+                String name = consoleIn.readLine();
+                if (name == null || name.trim().isEmpty()) {
+                    name = "Guest"; // default if user enters nothing
+                }
+                out.println(name); // send name to server
+
+
+                // Announce presence to the server
+                out.println("/status online");
+
+                System.out.println("Connected as " + name + ". Available commands:");
+                System.out.println("/quit, /list, /w <user> <msg>, /status <online|away|offline>");
+                System.out.println("/typing <start|stop>, /me <action>, /lastseen <user>");
+
                 // --- Main thread loop ---
                 String userInput;
                 while (true) {
@@ -78,10 +102,21 @@ public class ChatClient {
                     if (userInput == null) {
                         break;
                     }
-                    out.println(userInput);
+                    // Provide a small shortcut for away/online
+                    if (userInput.equalsIgnoreCase("/away")) {
+                        userInput = "/status away";
+                    } else if (userInput.equalsIgnoreCase("/online")) {
+                        userInput = "/status online";
+                    }
+
+                    // Send and handle quit to notify server we are going offline
                     if (userInput.equalsIgnoreCase("/quit")) {
+                        out.println("/status offline");
+                        out.println(userInput);
                         break;
                     }
+
+                    out.println(userInput);
                 }
                 System.out.println("You have been disconnected.");
 
